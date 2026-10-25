@@ -626,6 +626,11 @@ class RunningBiomechanicsAnalyzer:
             self._draw_panel_divider(canvas, video_w)
 
             writer.write(canvas)
+            if getattr(args, "show", False):
+                cv2.imshow("Running Biomechanics Analyzer", canvas)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    print("\nPlayback interrupted by user.")
+                    break
             frame_idx += 1
 
             now = time.time()
@@ -635,12 +640,18 @@ class RunningBiomechanicsAnalyzer:
 
         cap.release()
         writer.release()
+        if getattr(args, "show", False):
+            cv2.destroyAllWindows()
         landmarker.close()
         print()
 
         self._mux_audio(args.input, tmp_video_path, out_path)
 
         self._print_summary(out_path, metrics if 'metrics' in dir() else {}, cadence_est)
+
+        if getattr(args, "play", False):
+            self._play_video(out_path)
+
         return out_path
 
 
@@ -677,7 +688,7 @@ class RunningBiomechanicsAnalyzer:
             pct = min(100, int(frame_idx * 100 / frame_count))
             bar_len = 26
             filled = int(bar_len * pct / 100)
-            bar = "█" * filled + "-" * (bar_len - filled)
+            bar = "#" * filled + "-" * (bar_len - filled)
             rate = frame_idx / elapsed if elapsed > 0 else 0
             remaining = (frame_count - frame_idx) / rate if rate > 0 else 0
             eta_m, eta_s = divmod(int(remaining), 60)
@@ -1364,11 +1375,28 @@ class RunningBiomechanicsAnalyzer:
         elif not ffmpeg:
             print("(ffmpeg not found — output is video-only; install ffmpeg to keep audio)")
 
+    @staticmethod
+    def _play_video(path):
+        if not os.path.exists(path):
+            print(f"Video file not found to play: {path}")
+            return
+        print(f"Opening video playback: {path}")
+        try:
+            if os.name == "nt":
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.run(["open", path])
+            else:
+                subprocess.run(["xdg-open", path])
+        except Exception as e:
+            print(f"Could not open media player: {e}")
+
 
 def parse_args():
     p = argparse.ArgumentParser(
         description="Turn a runner video into a professional biomechanics analysis video.")
-    p.add_argument("input", help="Path to the input video (e.g. input.mp4)")
+    p.add_argument("input", nargs="?", default="demo/run.mp4",
+                   help="Path to the input video (default: demo/run.mp4)")
     p.add_argument("-o", "--output", default=None,
                    help="Output path (default: <input>_analyzed.mp4)")
     p.add_argument("--model", choices=["lite", "full", "heavy"], default="full",
@@ -1377,12 +1405,33 @@ def parse_args():
                    help="Max people to detect per frame before picking the primary runner (default: 3)")
     p.add_argument("--no-ocr", dest="ocr", action="store_false",
                    help="Disable treadmill speed-display OCR")
+    p.add_argument("--show", action="store_true",
+                   help="Show live analysis preview window during processing")
+    p.add_argument("--play", action="store_true",
+                   help="Automatically open and play the analyzed video when complete")
+    p.add_argument("--play-only", action="store_true",
+                   help="Play the existing demo or analyzed video immediately without reprocessing")
     p.set_defaults(ocr=True)
     return p.parse_args()
 
 
 def main():
+    if sys.platform == "win32":
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+            sys.stderr.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
     args = parse_args()
+
+    if args.play_only:
+        target = args.output or RunningBiomechanicsAnalyzer._default_output_path(args.input)
+        if not os.path.exists(target):
+            target = args.input
+        RunningBiomechanicsAnalyzer._play_video(target)
+        return
+
     if args.ocr and not _OCR_LIB_OK:
         print("(easyocr not installed — treadmill SPEED will show UNAVAILABLE. "
               "Install with 'pip install easyocr' to enable it.)")
